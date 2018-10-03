@@ -1,0 +1,69 @@
+Before running exec, the child calls ptrace with the first argument, equal to PTRACE_TRACEME. This tells the kernel that the process is being traced, 
+and when the child executes the execve system call, it hands over control to its parent. The parent waits for notification from the kernel with a wait() call.
+ Then the parent can check the arguments of the system call or do other things, 
+such as looking into the registers.
+
+Once, we get the registers, we can peek into it by using PTRACE_PEEKUSER. We can also change the values using PTRACE_POKEUSER
+By changing the values of registers, we can control the permission of any command.
+
+
+
+When the system call occurs, the kernel saves the original contents of the eax register, which contains the system call number. We can read this value from child's USER 
+segment by calling ptrace with the first argument PTRACE_PEEKUSER.
+
+Here we are tracing the write system calls, and ls makes three write system calls. The call to ptrace, with a first argument of PTRACE_SYSCALL, makes the kernel stop the child process whenever a system call entry or exit is made. It's equivalent to doing a PTRACE_CONT and stopping at the next system call entry/exit.
+In the previous example, we used PTRACE_PEEKUSER to look into the arguments of the write system call. When a system call returns, 
+the return value is placed in %eax, and it can be read as shown in that example.
+
+int main()
+{   pid_t child;
+    long orig_eax, eax;
+    long params[3];
+    int status;
+    int insyscall = 0;
+    child = fork();
+    if(child == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        execl("/bin/ls", "ls", NULL);
+    }
+    else {
+       while(1) {
+          wait(&status);
+          if(WIFEXITED(status))
+              break;
+          orig_eax = ptrace(PTRACE_PEEKUSER,
+                     child, 4 * ORIG_EAX, NULL);
+          if(orig_eax == SYS_write) {
+             if(insyscall == 0) {
+                /* Syscall entry */
+                insyscall = 1;
+                params[0] = ptrace(PTRACE_PEEKUSER,
+                                   child, 4 * EBX,
+                                   NULL);
+                params[1] = ptrace(PTRACE_PEEKUSER,
+                                   child, 4 * ECX,
+                                   NULL);
+                params[2] = ptrace(PTRACE_PEEKUSER,
+                                   child, 4 * EDX,
+                                   NULL);
+                printf("Write called with "
+                       "%ld, %ld, %ld\n",
+                       params[0], params[1],
+                       params[2]);
+                }
+          else { /* Syscall exit */
+                eax = ptrace(PTRACE_PEEKUSER,
+                             child, 4 * EAX, NULL);
+                    printf("Write returned "
+                           "with %ld\n", eax);
+                    insyscall = 0;
+                }
+            }
+            ptrace(PTRACE_SYSCALL,
+                   child, NULL, NULL);
+        }
+    }
+    return 0;
+}
+
+
